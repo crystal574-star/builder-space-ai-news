@@ -7,6 +7,7 @@ Usage:
   python3 scripts/publish_news.py draft.json --build      # fill id/message_text/sha first
   python3 scripts/publish_news.py edition.json --no-push  # local only
   python3 scripts/publish_news.py edition.json --dry-run  # validate + print, touch nothing
+  python3 scripts/publish_news.py draft.json --build --preview-dir DIR --preview-suffix aihot  # preview files only
 
 Exit codes: 0 published or no-op, 1 validation error, 3 refused (date already sent), 4 git error.
 """
@@ -27,6 +28,8 @@ def main(argv=None) -> int:
     ap.add_argument("--repo", default=str(nl.REPO_ROOT))
     ap.add_argument("--no-push", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--preview-dir", help="validate and write <date>-<suffix>.json/.txt here; no repo/git changes")
+    ap.add_argument("--preview-suffix", default="preview")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     repo = Path(a.repo)
@@ -41,6 +44,14 @@ def main(argv=None) -> int:
         print("INVALID:\n  " + "\n  ".join(errs), file=sys.stderr)
         return 1
     content = nl.dump_json(ed)
+    if a.preview_dir:
+        out = Path(a.preview_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        base = out / f"{ed['date']}-{a.preview_suffix}"
+        base.with_suffix(".json").write_text(content, encoding="utf-8", newline="\n")
+        base.with_suffix(".txt").write_text(ed["message_text"] + "\n", encoding="utf-8", newline="\n")
+        print(f"PREVIEW {base}.json / .txt ({len(ed['message_text'])} chars) sha={ed['content_sha256'][:12]}")
+        return 0
     if a.dry_run:
         print(ed["message_text"])
         print(f"\n[dry-run] valid edition {ed['edition_id']} sha={ed['content_sha256'][:12]}")

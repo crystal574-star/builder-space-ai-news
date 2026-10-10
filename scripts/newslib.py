@@ -19,7 +19,12 @@ SYD = ZoneInfo("Australia/Sydney")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORGS = ("OpenAI", "Anthropic", "Google DeepMind", "NVIDIA", "other")
 HEADER_PREFIX = "Builder Space 每日 AI 速递 · "
-FOOTER = "—— 由 Builder Space Bot 自动整理自 X 公开动态，仅供参考，请以原文为准。"
+FOOTER = "Builder Space Bot 自动整理，仅供参考，请以原文为准。\n来源：X 公开动态"
+FOOTER_AIHOT = "Builder Space Bot 自动整理，仅供参考，请以原文为准。\n来源：X 公开动态、AIHOT（aihot.news）"
+ORIGINS = ("x", "aihot", "x+aihot")
+ORG_LABELS = {"other": "业界"}  # display label in message_text only
+MAX_OTHER = 2
+_AIHOT_URL = re.compile(r"^https://aihot\.news/(story|items)/[A-Za-z0-9-]+$")
 TOKEN_ENV = "BUILDER_NEWS_GH_TOKEN"
 REMOTE_URL = "https://github.com/crystal574-star/builder-space-ai-news.git"
 
@@ -31,6 +36,10 @@ _HEX16 = re.compile(r"^[0-9a-f]{16}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TOP_KEYS = {"date", "edition_id", "generated_at", "items", "message_text", "content_sha256"}
 ITEM_KEYS = {"id", "org", "title_zh", "summary_zh", "source_url", "posted_at"}
+OPTIONAL_ITEM_KEYS = {"origin", "aihot_url", "aihot_rank", "aihot_source_count", "aihot_signal_count",
+                      "aihot_participant_count", "aihot_id"}
+ITEM_ORDER = ("id", "org", "title_zh", "summary_zh", "source_url", "posted_at", "origin", "aihot_url",
+              "aihot_rank", "aihot_source_count", "aihot_signal_count", "aihot_participant_count", "aihot_id")
 
 
 def sydney_now() -> _dt.datetime:
@@ -55,13 +64,23 @@ def header_for(date_str: str) -> str:
 
 
 def build_message_text(edition: dict) -> str:
+    """Briefing layout: numbered title + summary, then a 【来源】 block, then the footer."""
+    items = edition["items"]
     lines = [header_for(edition["date"]), ""]
-    for i, it in enumerate(edition["items"], 1):
-        lines.append(f"{i}. 【{it['org']}】{it['title_zh']}")
+    for i, it in enumerate(items, 1):
+        lines.append(f"{i}. 【{ORG_LABELS.get(it['org'], it['org'])}】{it['title_zh']}")
         lines.append(it["summary_zh"])
-        lines.append(f"原文：{it['source_url']}")
         lines.append("")
-    lines.append(FOOTER)
+    lines.append("——")
+    lines.append("【来源】")
+    for i, it in enumerate(items, 1):
+        lines.append(f"[{i}] 原文 {it['source_url']}")
+        if it.get("aihot_url"):
+            rank = f"（热点榜第 {it['aihot_rank']}）" if it.get("aihot_rank") else ""
+            lines.append(f"    AIHOT {it['aihot_url']}{rank}")
+    lines.append("")
+    uses_aihot = any(it.get("aihot_url") for it in items)
+    lines.append(FOOTER_AIHOT if uses_aihot else FOOTER)
     return "\n".join(lines)
 
 
@@ -75,7 +94,10 @@ def build_edition(draft: dict) -> dict:
     for it in ed.get("items", []):
         it = dict(it)
         it["id"] = url_id(it["source_url"])
-        items.append({k: it[k] for k in ("id", "org", "title_zh", "summary_zh", "source_url", "posted_at") if k in it})
+        if "origin" not in it:
+            it["origin"] = "x+aihot" if it.get("aihot_url") and "x.com/" in it["source_url"] else (
+                "aihot" if it.get("aihot_url") else "x")
+        items.append({k: it[k] for k in ITEM_ORDER if k in it})
     ed["items"] = items
     ed["message_text"] = build_message_text(ed)
     ed["content_sha256"] = sha256_text(ed["message_text"])
@@ -123,8 +145,19 @@ def validate_edition(ed, expected_date=None) -> list:
         if ITEM_KEYS - it.keys():
             errs.append(f"{p} missing keys: {sorted(ITEM_KEYS - it.keys())}")
             continue
-        if it.keys() - ITEM_KEYS:
-            errs.append(f"{p} unexpected keys: {sorted(it.keys() - ITEM_KEYS)}")
+        if it.keys() - ITEM_KEYS - OPTIONAL_ITEM_KEYS:
+            errs.append(f"{p} unexpected keys: {sorted(it.keys() - ITEM_KEYS - OPTIONAL_ITEM_KEYS)}")
+        if "origin" in it and it["origin"] not in ORIGINS:
+            errs.append(f"{p}.origin must be one of {ORIGINS}")
+        if "aihot_url" in it and not (isinstance(it["aihot_url"], str) and _AIHOT_URL.match(it["aihot_url"])):
+            errs.append(f"{p}.aihot_url must be https://aihot.news/story/<id> or /items/<id> (not the retired domain)")
+        if it.get("origin") in ("aihot", "x+aihot") and "aihot_url" not in it:
+            errs.append(f"{p}.origin={it['origin']} requires aihot_url")
+        if "aihot_rank" in it and not (isinstance(it["aihot_rank"], int) and 1 <= it["aihot_rank"] <= 10):
+            errs.append(f"{p}.aihot_rank must be an integer 1..10")
+        for k in ("aihot_source_count", "aihot_signal_count", "aihot_participant_count"):
+            if k in it and not (isinstance(it[k], int) and it[k] >= 0):
+                errs.append(f"{p}.{k} must be a non-negative integer")
         if it["org"] not in ORGS:
             errs.append(f"{p}.org invalid: {it['org']!r}")
         for k, mx in (("title_zh", 60), ("summary_zh", 120)):
@@ -146,6 +179,8 @@ def validate_edition(ed, expected_date=None) -> list:
             errs.append(f"{p}.id must be 16 hex chars")
         if not isinstance(it["posted_at"], str) or not _POSTED_RE.match(it["posted_at"]):
             errs.append(f"{p}.posted_at must be ISO 8601 with zone")
+    if sum(1 for it in items if isinstance(it, dict) and it.get("org") == "other") > MAX_OTHER:
+        errs.append(f"at most {MAX_OTHER} items may have org 'other'")
     mt = ed["message_text"]
     if not isinstance(mt, str) or not (20 <= len(mt) <= 4000):
         errs.append("message_text must be a string of 20..4000 chars")
@@ -156,6 +191,10 @@ def validate_edition(ed, expected_date=None) -> list:
         for it in items:
             if isinstance(it, dict) and isinstance(it.get("source_url"), str) and it["source_url"] not in mt:
                 errs.append(f"message_text missing link {it['source_url']}")
+            if isinstance(it, dict) and isinstance(it.get("aihot_url"), str) and it["aihot_url"] not in mt:
+                errs.append(f"message_text missing AIHOT link {it['aihot_url']}")
+        if any(isinstance(it, dict) and it.get("aihot_url") for it in items) and "AIHOT（aihot.news）" not in mt:
+            errs.append("message_text must credit AIHOT（aihot.news） when AIHOT items are included")
         if not isinstance(ed["content_sha256"], str) or not _HEX64.match(ed["content_sha256"]):
             errs.append("content_sha256 must be 64 hex chars")
         elif ed["content_sha256"] != sha256_text(mt):

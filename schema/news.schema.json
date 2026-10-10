@@ -13,6 +13,7 @@
       "type": "array",
       "minItems": 5,
       "maxItems": 5,
+      "description": "Exactly 5; at most 2 with org other (enforced by scripts/newslib.py)",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -23,8 +24,17 @@
           "title_zh": {"type": "string", "minLength": 1, "maxLength": 60},
           "summary_zh": {"type": "string", "minLength": 1, "maxLength": 120},
           "source_url": {"type": "string", "pattern": "^https://"},
-          "posted_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$"}
-        }
+          "posted_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$"},
+          "origin": {"enum": ["x", "aihot", "x+aihot"], "description": "Candidate pool; x+aihot when the same event was found in both"},
+          "aihot_url": {"type": "string", "pattern": "^https://aihot\\.news/(story|items)/[A-Za-z0-9-]+$", "description": "AIHOT reading page (story page preferred); aihot.news only, aihot.virxact.com retires 2026-10-31"},
+          "aihot_rank": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Rank in /api/v1/hot-topics at generation time (AIHOT has no numeric heat score)"},
+          "aihot_source_count": {"type": "integer", "minimum": 0, "description": "hot-topics sourceCount"},
+          "aihot_signal_count": {"type": "integer", "minimum": 0, "description": "hot-topics signalCount"},
+          "aihot_participant_count": {"type": "integer", "minimum": 0, "description": "hot-topics participantCount"},
+          "aihot_id": {"type": "string", "description": "AIHOT hot-topic item id"}
+        },
+        "if": {"required": ["origin"], "properties": {"origin": {"enum": ["aihot", "x+aihot"]}}},
+        "then": {"required": ["aihot_url"]}
       }
     },
     "message_text": {"type": "string", "minLength": 20, "maxLength": 4000, "description": "Full ready-to-send plain-text WeChat message; first line is the header"},
