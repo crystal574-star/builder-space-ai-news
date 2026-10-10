@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/crystal574-star/builder-space-ai-news/schema/news.schema.json",
+  "title": "Builder Space daily AI news edition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["date", "edition_id", "generated_at", "items", "message_text", "content_sha256"],
+  "properties": {
+    "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Sydney calendar date of the edition"},
+    "edition_id": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(-[a-z0-9]+)?$", "description": "Usually equal to date, e.g. 2026-10-11"},
+    "generated_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+1[01]:00$", "description": "ISO 8601 in Australia/Sydney (+11:00 AEDT / +10:00 AEST)"},
+    "items": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "org", "title_zh", "summary_zh", "source_url", "posted_at"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[0-9a-f]{16}$", "description": "First 16 hex chars of sha256(source_url)"},
+          "org": {"enum": ["OpenAI", "Anthropic", "Google DeepMind", "NVIDIA", "other"]},
+          "title_zh": {"type": "string", "minLength": 1, "maxLength": 60},
+          "summary_zh": {"type": "string", "minLength": 1, "maxLength": 120},
+          "source_url": {"type": "string", "pattern": "^https://"},
+          "posted_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$"}
+        }
+      }
+    },
+    "message_text": {"type": "string", "minLength": 20, "maxLength": 4000, "description": "Full ready-to-send plain-text WeChat message; first line is the header"},
+    "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "sha256 hex of message_text encoded as UTF-8"}
+  }
+}
