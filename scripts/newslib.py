@@ -5,6 +5,15 @@ Validation mirrors schema/news.schema.json so no third-party dependency is neede
 The GitHub token is only read from the BUILDER_NEWS_GH_TOKEN environment variable
 and handed to git through an inline credential helper; it never appears in argv,
 files, or output.
+
+Edition model
+-------------
+edition_id  = YYYY-MM-DD (default/morning) or YYYY-MM-DD-<label> (e.g. 2026-10-11-noon)
+file        = news/<edition_id>.json, status/<edition_id>.json
+header      = first line, e.g. 'Builder Space 每日 AI 速递 · 午间版 · 10月11日'
+tag         = LAST line, e.g. '#BS-1011' / '#BS-1011-noon' (used by the Windows publisher to verify)
+tone        = 'normal' | 'cute' (soft-cute style approved 2026-10-11, see /workspace/cute/soft.txt)
+Editions published before the tag existed (news/2026-10-11.json) are "legacy": no tag/tone keys.
 """
 import datetime as _dt
 import hashlib
@@ -18,9 +27,21 @@ from zoneinfo import ZoneInfo
 SYD = ZoneInfo("Australia/Sydney")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORGS = ("OpenAI", "Anthropic", "Google DeepMind", "NVIDIA", "other")
+TONES = ("normal", "cute")
 HEADER_PREFIX = "Builder Space 每日 AI 速递 · "
-FOOTER = "Builder Space Bot 自动整理，仅供参考，请以原文为准。\n来源：X 公开动态"
-FOOTER_AIHOT = "Builder Space Bot 自动整理，仅供参考，请以原文为准。\n来源：X 公开动态、AIHOT（aihot.news）"
+DISCLAIMER = "Builder Space Bot 自动整理，仅供参考，请以原文为准。"
+CREDIT_X = "来源：X 公开动态"
+CREDIT_AIHOT = "来源：X 公开动态、AIHOT（aihot.news）"
+FOOTER = f"{DISCLAIMER}\n{CREDIT_X}"
+FOOTER_AIHOT = f"{DISCLAIMER}\n{CREDIT_AIHOT}"
+EDITION_LABELS = {"noon": "午间版", "evening": "晚间版", "extra": "特别版"}
+# Soft-cute wording, copied from the version approved and sent on 2026-10-11 (/workspace/cute/soft.txt).
+CUTE_SALUTATION = {"": "早安", "noon": "午安", "evening": "晚上好"}
+CUTE_GREETING_1 = "哈喽哈喽~ Builder Space 的宝宝们{salutation}呀 🌸✨"
+CUTE_GREETING_2 = "人家又来送 AI 速递啦（{when}）！今天也乖乖帮大家挑了 5 条最值得看的，快来摸摸头再看嘛~ (〃'▽'〃)💕"
+CUTE_CLOSING = "今天的速递就到这里啦~ 人家明天还会准时来找你们玩的！有问题随时戳戳人家哦 (｡･ω･｡)ﾉ♡ 爱你们~ 🌷"
+MAX_ASIDES = 3
+ASIDE_MAX_LEN = 40
 ORIGINS = ("x", "aihot", "x+aihot")
 ORG_LABELS = {"other": "业界"}  # display label in message_text only
 MAX_OTHER = 2
@@ -35,10 +56,12 @@ _POSTED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]
 _HEX16 = re.compile(r"^[0-9a-f]{16}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TOP_KEYS = {"date", "edition_id", "generated_at", "items", "message_text", "content_sha256"}
+OPTIONAL_TOP_KEYS = {"tone", "tag"}
+TOP_ORDER = ("date", "edition_id", "tone", "tag", "generated_at", "items", "message_text", "content_sha256")
 ITEM_KEYS = {"id", "org", "title_zh", "summary_zh", "source_url", "posted_at"}
-OPTIONAL_ITEM_KEYS = {"origin", "aihot_url", "aihot_rank", "aihot_source_count", "aihot_signal_count",
+OPTIONAL_ITEM_KEYS = {"aside_zh", "origin", "aihot_url", "aihot_rank", "aihot_source_count", "aihot_signal_count",
                       "aihot_participant_count", "aihot_id"}
-ITEM_ORDER = ("id", "org", "title_zh", "summary_zh", "source_url", "posted_at", "origin", "aihot_url",
+ITEM_ORDER = ("id", "org", "title_zh", "summary_zh", "aside_zh", "source_url", "posted_at", "origin", "aihot_url",
               "aihot_rank", "aihot_source_count", "aihot_signal_count", "aihot_participant_count", "aihot_id")
 
 
@@ -58,38 +81,81 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def header_for(date_str: str) -> str:
+def edition_label(date_str: str, edition_id: str = "") -> str:
+    """'' for the default edition, else the suffix ('noon')."""
+    e = edition_id or ""
+    return e[len(date_str) + 1:] if e.startswith(date_str + "-") else ""
+
+
+def header_for(date_str: str, edition_id: str = "") -> str:
+    """Morning: '… · 10月11日'; labelled: '… · 午间版 · 10月11日' (label before the date, so no header
+    is a substring of another)."""
     d = _dt.date.fromisoformat(date_str)
-    return f"{HEADER_PREFIX}{d.month}月{d.day}日"
+    suffix = edition_label(date_str, edition_id)
+    label = EDITION_LABELS.get(suffix, suffix)
+    return f"{HEADER_PREFIX}{label + ' · ' if label else ''}{d.month}月{d.day}日"
 
 
-def build_message_text(edition: dict) -> str:
-    """Briefing layout: numbered title + summary, then a 【来源】 block, then the footer."""
-    items = edition["items"]
-    lines = [header_for(edition["date"]), ""]
-    for i, it in enumerate(items, 1):
-        lines.append(f"{i}. 【{ORG_LABELS.get(it['org'], it['org'])}】{it['title_zh']}")
-        lines.append(it["summary_zh"])
-        lines.append("")
-    lines.append("——")
-    lines.append("【来源】")
+def tag_for(date_str: str, edition_id: str = "") -> str:
+    d = _dt.date.fromisoformat(date_str)
+    suffix = edition_label(date_str, edition_id)
+    return f"#BS-{d.month:02d}{d.day:02d}{'-' + suffix if suffix else ''}"
+
+
+def edition_relpath(edition_id: str, kind: str = "news") -> str:
+    return f"{kind}/{edition_id}.json"
+
+
+def _sources_block(items) -> list:
+    lines = ["——", "【来源】"]
     for i, it in enumerate(items, 1):
         lines.append(f"[{i}] 原文 {it['source_url']}")
         if it.get("aihot_url"):
             rank = f"（热点榜第 {it['aihot_rank']}）" if it.get("aihot_rank") else ""
             lines.append(f"    AIHOT {it['aihot_url']}{rank}")
+    return lines
+
+
+def build_message_text(edition: dict) -> str:
+    """Briefing layout. normal: header, items, sources, footer, tag.
+    cute: header, two soft-cute greeting lines, items (+ optional aside), closing, sources, footer, tag."""
+    items = edition["items"]
+    date, eid = edition["date"], edition.get("edition_id", "")
+    tone = edition.get("tone", "normal")
+    suffix = edition_label(date, eid)
+    lines = [header_for(date, eid)]
+    if tone == "cute":
+        d = _dt.date.fromisoformat(date)
+        label = EDITION_LABELS.get(suffix, suffix)
+        when = f"{d.month}月{d.day}日" + (f" {label}" if label else "")
+        lines.append(CUTE_GREETING_1.format(salutation=CUTE_SALUTATION.get(suffix, "你好")))
+        lines.append(CUTE_GREETING_2.format(when=when))
+    lines.append("")
+    for i, it in enumerate(items, 1):
+        lines.append(f"{i}. 【{ORG_LABELS.get(it['org'], it['org'])}】{it['title_zh']}")
+        lines.append(it["summary_zh"])
+        if tone == "cute" and it.get("aside_zh"):
+            lines.append(f"（{it['aside_zh']}）")
+        lines.append("")
+    if tone == "cute":
+        lines.append(CUTE_CLOSING)
+        lines.append("")
+    lines += _sources_block(items)
     lines.append("")
     uses_aihot = any(it.get("aihot_url") for it in items)
     lines.append(FOOTER_AIHOT if uses_aihot else FOOTER)
+    lines.append(tag_for(date, eid))
     return "\n".join(lines)
 
 
 def build_edition(draft: dict) -> dict:
-    """Fill derived fields (ids, generated_at, edition_id, message_text, sha)."""
+    """Fill derived fields (ids, origin, generated_at, edition_id, tone, tag, message_text, sha)."""
     ed = dict(draft)
     ed.setdefault("date", sydney_today())
     ed.setdefault("edition_id", ed["date"])
+    ed.setdefault("tone", "normal")
     ed.setdefault("generated_at", sydney_now().isoformat())
+    ed["tag"] = tag_for(ed["date"], ed["edition_id"])
     items = []
     for it in ed.get("items", []):
         it = dict(it)
@@ -97,46 +163,60 @@ def build_edition(draft: dict) -> dict:
         if "origin" not in it:
             it["origin"] = "x+aihot" if it.get("aihot_url") and "x.com/" in it["source_url"] else (
                 "aihot" if it.get("aihot_url") else "x")
+        if not it.get("aside_zh"):
+            it.pop("aside_zh", None)
         items.append({k: it[k] for k in ITEM_ORDER if k in it})
     ed["items"] = items
     ed["message_text"] = build_message_text(ed)
     ed["content_sha256"] = sha256_text(ed["message_text"])
-    return {k: ed[k] for k in ("date", "edition_id", "generated_at", "items", "message_text", "content_sha256")}
+    return {k: ed[k] for k in TOP_ORDER if k in ed}
 
 
-def validate_edition(ed, expected_date=None) -> list:
-    """Return a list of error strings (empty list == valid)."""
+def is_legacy(ed: dict) -> bool:
+    return "tag" not in ed
+
+
+def validate_edition(ed, expected_date=None, require_tag=False) -> list:
+    """Return a list of error strings (empty list == valid). Legacy (untagged) editions are accepted
+    unless require_tag is set."""
     errs = []
     if not isinstance(ed, dict):
         return ["edition must be a JSON object"]
     missing = TOP_KEYS - ed.keys()
-    extra = ed.keys() - TOP_KEYS
+    extra = ed.keys() - TOP_KEYS - OPTIONAL_TOP_KEYS
     if missing:
         errs.append(f"missing keys: {sorted(missing)}")
     if extra:
         errs.append(f"unexpected keys: {sorted(extra)}")
     if missing:
         return errs
-    if not isinstance(ed["date"], str) or not _DATE_RE.match(ed["date"]):
-        errs.append("date must be YYYY-MM-DD")
-    else:
+    date_ok = isinstance(ed["date"], str) and bool(_DATE_RE.match(ed["date"]))
+    if date_ok:
         try:
             _dt.date.fromisoformat(ed["date"])
         except ValueError:
-            errs.append("date is not a real calendar date")
+            date_ok = False
+    if not date_ok:
+        errs.append("date must be a real YYYY-MM-DD date")
     if expected_date and ed["date"] != expected_date:
         errs.append(f"date {ed['date']} != expected {expected_date}")
-    if not isinstance(ed["edition_id"], str) or not _EDITION_RE.match(ed["edition_id"]):
-        errs.append("edition_id must look like YYYY-MM-DD")
-    elif not ed["edition_id"].startswith(str(ed["date"])):
-        errs.append("edition_id must start with date")
+    eid_ok = isinstance(ed["edition_id"], str) and bool(_EDITION_RE.match(ed["edition_id"])) \
+        and ed["edition_id"].startswith(str(ed["date"]))
+    if not eid_ok:
+        errs.append("edition_id must be YYYY-MM-DD or YYYY-MM-DD-<label>, starting with date")
     if not isinstance(ed["generated_at"], str) or not _GEN_RE.match(ed["generated_at"]):
         errs.append("generated_at must be ISO 8601 with +11:00/+10:00 offset")
+    tone = ed.get("tone", "normal")
+    if tone not in TONES:
+        errs.append(f"tone must be one of {TONES}")
+    if require_tag and is_legacy(ed):
+        errs.append("tag missing (legacy edition): rebuild with --build")
     items = ed["items"]
     if not isinstance(items, list) or len(items) != 5:
         errs.append("items must be a list of exactly 5")
         items = items if isinstance(items, list) else []
     seen = set()
+    asides = 0
     for n, it in enumerate(items, 1):
         p = f"items[{n}]"
         if not isinstance(it, dict):
@@ -166,6 +246,13 @@ def validate_edition(ed, expected_date=None) -> list:
                 errs.append(f"{p}.{k} must be a non-empty string")
             elif len(v) > mx:
                 errs.append(f"{p}.{k} too long ({len(v)} > {mx} chars)")
+        if "aside_zh" in it:
+            a = it["aside_zh"]
+            asides += 1
+            if not isinstance(a, str) or not a.strip() or len(a) > ASIDE_MAX_LEN:
+                errs.append(f"{p}.aside_zh must be 1..{ASIDE_MAX_LEN} chars")
+            elif re.search(r"\d|https?://|[（）()]", a):
+                errs.append(f"{p}.aside_zh must be playful only: no digits, links or brackets (facts stay in summary_zh)")
         url = it["source_url"]
         if not isinstance(url, str) or not url.startswith("https://"):
             errs.append(f"{p}.source_url must be https://")
@@ -179,26 +266,42 @@ def validate_edition(ed, expected_date=None) -> list:
             errs.append(f"{p}.id must be 16 hex chars")
         if not isinstance(it["posted_at"], str) or not _POSTED_RE.match(it["posted_at"]):
             errs.append(f"{p}.posted_at must be ISO 8601 with zone")
+    if asides > MAX_ASIDES:
+        errs.append(f"at most {MAX_ASIDES} items may have aside_zh")
     if sum(1 for it in items if isinstance(it, dict) and it.get("org") == "other") > MAX_OTHER:
         errs.append(f"at most {MAX_OTHER} items may have org 'other'")
     mt = ed["message_text"]
     if not isinstance(mt, str) or not (20 <= len(mt) <= 4000):
         errs.append("message_text must be a string of 20..4000 chars")
-    else:
-        if isinstance(ed["date"], str) and _DATE_RE.match(ed["date"]):
-            if mt.splitlines()[0] != header_for(ed["date"]):
-                errs.append("message_text first line must be the header for date")
-        for it in items:
-            if isinstance(it, dict) and isinstance(it.get("source_url"), str) and it["source_url"] not in mt:
-                errs.append(f"message_text missing link {it['source_url']}")
-            if isinstance(it, dict) and isinstance(it.get("aihot_url"), str) and it["aihot_url"] not in mt:
-                errs.append(f"message_text missing AIHOT link {it['aihot_url']}")
-        if any(isinstance(it, dict) and it.get("aihot_url") for it in items) and "AIHOT（aihot.news）" not in mt:
-            errs.append("message_text must credit AIHOT（aihot.news） when AIHOT items are included")
-        if not isinstance(ed["content_sha256"], str) or not _HEX64.match(ed["content_sha256"]):
-            errs.append("content_sha256 must be 64 hex chars")
-        elif ed["content_sha256"] != sha256_text(mt):
-            errs.append("content_sha256 does not match message_text")
+        return errs
+    lines = mt.splitlines()
+    if date_ok and eid_ok:
+        if lines[0] != header_for(ed["date"], ed["edition_id"]):
+            errs.append("message_text first line must be the header for date/edition")
+        if not is_legacy(ed):
+            want = tag_for(ed["date"], ed["edition_id"])
+            if ed["tag"] != want:
+                errs.append(f"tag must be {want}")
+            if lines[-1] != want:
+                errs.append(f"message_text last line must be the tag {want}")
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        for k in ("source_url", "aihot_url"):
+            if isinstance(it.get(k), str) and it[k] not in mt:
+                errs.append(f"message_text missing {'AIHOT ' if k == 'aihot_url' else ''}link {it[k]}")
+        if not is_legacy(ed):
+            for k in ("title_zh", "summary_zh"):
+                if isinstance(it.get(k), str) and it[k] not in mt:
+                    errs.append(f"message_text missing {k} of {it.get('source_url')}")
+            if tone == "cute" and isinstance(it.get("aside_zh"), str) and f"（{it['aside_zh']}）" not in mt:
+                errs.append(f"message_text missing aside of {it.get('source_url')}")
+    if any(isinstance(it, dict) and it.get("aihot_url") for it in items) and "AIHOT（aihot.news）" not in mt:
+        errs.append("message_text must credit AIHOT（aihot.news） when AIHOT items are included")
+    if not isinstance(ed["content_sha256"], str) or not _HEX64.match(ed["content_sha256"]):
+        errs.append("content_sha256 must be 64 hex chars")
+    elif ed["content_sha256"] != sha256_text(mt):
+        errs.append("content_sha256 does not match message_text")
     return errs
 
 
@@ -248,12 +351,15 @@ def commit_and_push(paths, message, repo=REPO_ROOT) -> str:
     return git("rev-parse", "HEAD", repo=repo).stdout.strip()
 
 
-def status_is_sent(date_str: str, repo=REPO_ROOT) -> bool:
-    p = Path(repo) / "status" / f"{date_str}.json"
+SENT_STATUSES = ("sent", "verified", "unverified")  # unverified = keystrokes were sent, delivery not confirmed
+
+
+def status_is_sent(edition_id: str, repo=REPO_ROOT) -> bool:
+    p = Path(repo) / edition_relpath(edition_id, "status")
     if not p.exists():
         return False
     try:
         st = json.loads(p.read_text(encoding="utf-8"))
     except ValueError:
         return True  # unreadable status: be conservative
-    return st.get("status") in ("sent", "verified") or bool(st.get("verified"))
+    return st.get("status") in SENT_STATUSES or bool(st.get("verified"))

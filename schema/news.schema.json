@@ -7,7 +7,9 @@
   "required": ["date", "edition_id", "generated_at", "items", "message_text", "content_sha256"],
   "properties": {
     "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Sydney calendar date of the edition"},
-    "edition_id": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(-[a-z0-9]+)?$", "description": "Usually equal to date, e.g. 2026-10-11"},
+    "edition_id": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(-[a-z0-9]+)?$", "description": "date for the default edition (news/<date>.json), date-<label> for labelled ones (news/<date>-<label>.json), e.g. 2026-10-11-noon"},
+    "tone": {"enum": ["normal", "cute"], "description": "Rendering tone of message_text; cute = approved soft-cute style. Absent in legacy editions"},
+    "tag": {"type": "string", "pattern": "^#BS-\\d{4}(-[a-z0-9]+)?$", "description": "Edition tag, also the LAST line of message_text, e.g. #BS-1011 or #BS-1011-noon. Absent only in legacy editions"},
     "generated_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+1[01]:00$", "description": "ISO 8601 in Australia/Sydney (+11:00 AEDT / +10:00 AEST)"},
     "items": {
       "type": "array",
@@ -23,6 +25,7 @@
           "org": {"enum": ["OpenAI", "Anthropic", "Google DeepMind", "NVIDIA", "other"]},
           "title_zh": {"type": "string", "minLength": 1, "maxLength": 60},
           "summary_zh": {"type": "string", "minLength": 1, "maxLength": 120},
+          "aside_zh": {"type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[^0-9()（）]*$", "description": "Optional playful aside for tone=cute (max 3 per edition); never states facts, no digits/links"},
           "source_url": {"type": "string", "pattern": "^https://"},
           "posted_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$"},
           "origin": {"enum": ["x", "aihot", "x+aihot"], "description": "Candidate pool; x+aihot when the same event was found in both"},

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Write status/YYYY-MM-DD.json (send result reported by the Windows publisher) and push.
+"""Write status/<edition_id>.json (send result reported by the Windows publisher) and push.
 
 Example:
   python3 scripts/record_status.py --date 2026-10-11 --status verified --verified \
@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import newslib as nl  # noqa: E402
 
-STATUSES = ("pending", "sent", "verified", "failed", "skipped")
+STATUSES = ("pending", "sent", "verified", "unverified", "failed", "skipped")
 
 
 def main(argv=None) -> int:
@@ -45,10 +45,15 @@ def main(argv=None) -> int:
     except RuntimeError as e:
         print(f"GIT ERROR: {e}", file=sys.stderr)
         return 4
-    path = repo / "status" / f"{date}.json"
+    edition_id = a.edition_id or date
+    if not edition_id.startswith(date):
+        print("--edition-id must start with --date", file=sys.stderr)
+        return 1
+    path = repo / nl.edition_relpath(edition_id, "status")
     prev = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     event = {
-        "edition_id": a.edition_id or date,
+        "edition_id": edition_id,
+        "tag": nl.tag_for(date, edition_id),
         "target_mode": a.target_mode,
         "status": a.status,
         "verified": bool(a.verified),
@@ -65,7 +70,7 @@ def main(argv=None) -> int:
         print(f"WROTE {path.relative_to(repo)}")
         return 0
     try:
-        sha = nl.commit_and_push([path], f"status: {date} {a.status}", repo=repo)
+        sha = nl.commit_and_push([path], f"status: {edition_id} {a.status}", repo=repo)
     except RuntimeError as e:
         print(f"GIT ERROR: {e}", file=sys.stderr)
         return 4

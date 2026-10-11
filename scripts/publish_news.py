@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Validate a news edition and publish it to news/YYYY-MM-DD.json (Sydney date).
+"""Validate a news edition and publish it to news/<edition_id>.json.
+
+news/YYYY-MM-DD.json is the default (morning) edition; labelled editions such as
+edition_id 2026-10-11-noon go to news/2026-10-11-noon.json, so nothing overwrites the morning file.
+New editions must carry the tag line (built by --build); legacy untagged files are only re-checked.
 
 Usage:
   python3 scripts/publish_news.py edition.json            # validate, write, commit, push
@@ -9,7 +13,7 @@ Usage:
   python3 scripts/publish_news.py edition.json --dry-run  # validate + print, touch nothing
   python3 scripts/publish_news.py draft.json --build --preview-dir DIR --preview-suffix aihot  # preview files only
 
-Exit codes: 0 published or no-op, 1 validation error, 3 refused (date already sent), 4 git error.
+Exit codes: 0 published or no-op, 1 validation error, 3 refused (edition already sent), 4 git error.
 """
 import argparse
 import json
@@ -47,7 +51,7 @@ def main(argv=None) -> int:
     if a.preview_dir:
         out = Path(a.preview_dir)
         out.mkdir(parents=True, exist_ok=True)
-        base = out / f"{ed['date']}-{a.preview_suffix}"
+        base = out / f"{ed['edition_id']}-{a.preview_suffix}"
         base.with_suffix(".json").write_text(content, encoding="utf-8", newline="\n")
         base.with_suffix(".txt").write_text(ed["message_text"] + "\n", encoding="utf-8", newline="\n")
         print(f"PREVIEW {base}.json / .txt ({len(ed['message_text'])} chars) sha={ed['content_sha256'][:12]}")
@@ -64,7 +68,7 @@ def main(argv=None) -> int:
         print(f"GIT ERROR: {e}", file=sys.stderr)
         return 4
 
-    target = repo / "news" / f"{ed['date']}.json"
+    target = repo / nl.edition_relpath(ed["edition_id"])
     if target.exists():
         existing_text = target.read_text(encoding="utf-8")
         try:
@@ -77,9 +81,12 @@ def main(argv=None) -> int:
         if same:
             print(f"NO-OP: {target.relative_to(repo)} already has identical content")
             return 0
-        if nl.status_is_sent(ed["date"], repo):
-            print(f"REFUSED: {ed['date']} is already marked sent in status/; not overwriting", file=sys.stderr)
+        if nl.status_is_sent(ed["edition_id"], repo):
+            print(f"REFUSED: {ed['edition_id']} is already marked sent in status/; not overwriting", file=sys.stderr)
             return 3
+    if nl.is_legacy(ed):
+        print("INVALID: edition has no tag line (legacy format); rebuild it with --build", file=sys.stderr)
+        return 1
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8", newline="\n")
     if a.no_push:
