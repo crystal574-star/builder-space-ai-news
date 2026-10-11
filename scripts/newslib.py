@@ -12,7 +12,7 @@ edition_id  = YYYY-MM-DD (default/morning) or YYYY-MM-DD-<label> (e.g. 2026-10-1
 file        = news/<edition_id>.json, status/<edition_id>.json
 header      = first line, e.g. 'Builder Space 每日 AI 速递 · 午间版 · 10月11日'
 tag         = LAST line, e.g. '#BS-1011' / '#BS-1011-noon' (used by the Windows publisher to verify)
-tone        = 'normal' | 'cute' (soft-cute style approved 2026-10-11, see /workspace/cute/soft.txt)
+tone        = 'normal' | 'cute' (playful + emoji, one quip per item; v2 approved 2026-10-11, NOT the old 嗲 style)
 Editions published before the tag existed (news/2026-10-11.json) are "legacy": no tag/tone keys.
 """
 import datetime as _dt
@@ -35,13 +35,16 @@ CREDIT_AIHOT = "来源：X 公开动态、AIHOT（aihot.news）"
 FOOTER = f"{DISCLAIMER}\n{CREDIT_X}"
 FOOTER_AIHOT = f"{DISCLAIMER}\n{CREDIT_AIHOT}"
 EDITION_LABELS = {"noon": "午间版", "evening": "晚间版", "extra": "特别版"}
-# Soft-cute wording, copied from the version approved and sent on 2026-10-11 (/workspace/cute/soft.txt).
-CUTE_SALUTATION = {"": "早安", "noon": "午安", "evening": "晚上好"}
-CUTE_GREETING_1 = "哈喽哈喽~ Builder Space 的宝宝们{salutation}呀 🌸✨"
-CUTE_GREETING_2 = "人家又来送 AI 速递啦（{when}）！今天也乖乖帮大家挑了 5 条最值得看的，快来摸摸头再看嘛~ (〃'▽'〃)💕"
-CUTE_CLOSING = "今天的速递就到这里啦~ 人家明天还会准时来找你们玩的！有问题随时戳戳人家哦 (｡･ω･｡)ﾉ♡ 爱你们~ 🌷"
-MAX_ASIDES = 3
+# Cute tone v2 (approved 2026-10-11 16:22): playful, lots of emoji, one quip per item, not 嗲.
+CUTE_SALUTATION = {"": "早安", "noon": "午安", "evening": "晚上好"}  # other labels: '哈喽大家好呀'
+CUTE_GREETING = "哈喽大家{salutation}呀 👋🌸 新鲜的 AI 速递送到啦～今天挑了 5 条值得一看的，冲！🚀"
+CUTE_CLOSING = "今天就到这里啦～明天见 👋 有想聊的随时找我 😊💬"
+CUTE_BANNED = ("人家", "宝宝", "摸摸头", "爱你们", "嗲")  # the old soft-cute style, must not come back
+MAX_ASIDES = 5
 ASIDE_MAX_LEN = 40
+ASIDE_MAX_EMOJI = 3
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2300-\u23FF\u3030\u303D\u3297\u3299]")
+_EMOJI_JOINERS = re.compile("[\uFE0F\u200D\U0001F3FB-\U0001F3FF]")
 ORIGINS = ("x", "aihot", "x+aihot")
 ORG_LABELS = {"other": "业界"}  # display label in message_text only
 MAX_OTHER = 2
@@ -59,9 +62,9 @@ TOP_KEYS = {"date", "edition_id", "generated_at", "items", "message_text", "cont
 OPTIONAL_TOP_KEYS = {"tone", "tag"}
 TOP_ORDER = ("date", "edition_id", "tone", "tag", "generated_at", "items", "message_text", "content_sha256")
 ITEM_KEYS = {"id", "org", "title_zh", "summary_zh", "source_url", "posted_at"}
-OPTIONAL_ITEM_KEYS = {"aside_zh", "origin", "aihot_url", "aihot_rank", "aihot_source_count", "aihot_signal_count",
+OPTIONAL_ITEM_KEYS = {"title_emoji", "aside_zh", "origin", "aihot_url", "aihot_rank", "aihot_source_count", "aihot_signal_count",
                       "aihot_participant_count", "aihot_id"}
-ITEM_ORDER = ("id", "org", "title_zh", "summary_zh", "aside_zh", "source_url", "posted_at", "origin", "aihot_url",
+ITEM_ORDER = ("id", "org", "title_zh", "title_emoji", "summary_zh", "aside_zh", "source_url", "posted_at", "origin", "aihot_url",
               "aihot_rank", "aihot_source_count", "aihot_signal_count", "aihot_participant_count", "aihot_id")
 
 
@@ -118,21 +121,19 @@ def _sources_block(items) -> list:
 
 def build_message_text(edition: dict) -> str:
     """Briefing layout. normal: header, items, sources, footer, tag.
-    cute: header, two soft-cute greeting lines, items (+ optional aside), closing, sources, footer, tag."""
+    cute: header, greeting line, items (title + emoji, summary, quip), closing, sources, footer, tag."""
     items = edition["items"]
     date, eid = edition["date"], edition.get("edition_id", "")
     tone = edition.get("tone", "normal")
     suffix = edition_label(date, eid)
     lines = [header_for(date, eid)]
     if tone == "cute":
-        d = _dt.date.fromisoformat(date)
-        label = EDITION_LABELS.get(suffix, suffix)
-        when = f"{d.month}月{d.day}日" + (f" {label}" if label else "")
-        lines.append(CUTE_GREETING_1.format(salutation=CUTE_SALUTATION.get(suffix, "你好")))
-        lines.append(CUTE_GREETING_2.format(when=when))
+        sal = CUTE_SALUTATION.get(suffix)
+        lines.append(CUTE_GREETING.format(salutation=sal) if sal else CUTE_GREETING.replace("{salutation}", "好"))
     lines.append("")
     for i, it in enumerate(items, 1):
-        lines.append(f"{i}. 【{ORG_LABELS.get(it['org'], it['org'])}】{it['title_zh']}")
+        emoji = f" {it['title_emoji']}" if tone == "cute" and it.get("title_emoji") else ""
+        lines.append(f"{i}. 【{ORG_LABELS.get(it['org'], it['org'])}】{it['title_zh']}{emoji}")
         lines.append(it["summary_zh"])
         if tone == "cute" and it.get("aside_zh"):
             lines.append(f"（{it['aside_zh']}）")
@@ -163,13 +164,18 @@ def build_edition(draft: dict) -> dict:
         if "origin" not in it:
             it["origin"] = "x+aihot" if it.get("aihot_url") and "x.com/" in it["source_url"] else (
                 "aihot" if it.get("aihot_url") else "x")
-        if not it.get("aside_zh"):
-            it.pop("aside_zh", None)
+        for k in ("aside_zh", "title_emoji"):
+            if not it.get(k):
+                it.pop(k, None)
         items.append({k: it[k] for k in ITEM_ORDER if k in it})
     ed["items"] = items
     ed["message_text"] = build_message_text(ed)
     ed["content_sha256"] = sha256_text(ed["message_text"])
     return {k: ed[k] for k in TOP_ORDER if k in ed}
+
+
+def emoji_count(text: str) -> int:
+    return len(_EMOJI.findall(text))
 
 
 def is_legacy(ed: dict) -> bool:
@@ -253,6 +259,16 @@ def validate_edition(ed, expected_date=None, require_tag=False) -> list:
                 errs.append(f"{p}.aside_zh must be 1..{ASIDE_MAX_LEN} chars")
             elif re.search(r"\d|https?://|[（）()]", a):
                 errs.append(f"{p}.aside_zh must be playful only: no digits, links or brackets (facts stay in summary_zh)")
+            elif tone == "cute" and not (1 <= emoji_count(a) <= ASIDE_MAX_EMOJI):
+                errs.append(f"{p}.aside_zh needs 1..{ASIDE_MAX_EMOJI} emoji")
+        elif tone == "cute":
+            errs.append(f"{p}.aside_zh required in cute tone (one quip per item)")
+        if "title_emoji" in it:
+            te = it["title_emoji"]
+            if not isinstance(te, str) or not (1 <= emoji_count(te) <= 2) or _EMOJI_JOINERS.sub("", _EMOJI.sub("", te)).strip():
+                errs.append(f"{p}.title_emoji must be 1-2 emoji and nothing else")
+        elif tone == "cute":
+            errs.append(f"{p}.title_emoji required in cute tone")
         url = it["source_url"]
         if not isinstance(url, str) or not url.startswith("https://"):
             errs.append(f"{p}.source_url must be https://")
@@ -271,6 +287,10 @@ def validate_edition(ed, expected_date=None, require_tag=False) -> list:
     if sum(1 for it in items if isinstance(it, dict) and it.get("org") == "other") > MAX_OTHER:
         errs.append(f"at most {MAX_OTHER} items may have org 'other'")
     mt = ed["message_text"]
+    if tone == "cute" and isinstance(mt, str):
+        hit = [w for w in CUTE_BANNED if w in mt]
+        if hit:
+            errs.append(f"cute tone must not use the old 嗲 wording: {hit}")
     if not isinstance(mt, str) or not (20 <= len(mt) <= 4000):
         errs.append("message_text must be a string of 20..4000 chars")
         return errs

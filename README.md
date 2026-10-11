@@ -19,14 +19,14 @@ UNSW Builder Space 每日 AI 新闻中转仓库。Grok Bot 每天（悉尼时间
 {
   "date": "2026-10-11",
   "edition_id": "2026-10-11",          // 加更版为 2026-10-11-noon 等
-  "tone": "cute",                      // normal | cute（软萌版）
+  "tone": "cute",                      // normal | cute（俏皮 + emoji 版）
   "tag": "#BS-1011",                   // 本期标记，加更版为 #BS-1011-noon；也是 message_text 的最后一行
   "generated_at": "2026-10-11T08:40:00+11:00",
   "items": [  // 恰好 5 条
     {"id": "sha256(source_url) 前 16 位", "org": "OpenAI|Anthropic|Google DeepMind|NVIDIA|other",
      "title_zh": "...", "summary_zh": "≤120 字", "source_url": "https://x.com/...", "posted_at": "ISO 时间"}
   ],
-  // 可选：aside_zh（软萌版的小旁白）、origin (x|aihot|x+aihot)、aihot_url (https://aihot.news/story/…)、aihot_rank 等
+  // 可选：title_emoji、aside_zh（cute 语气下每条必填）、origin (x|aihot|x+aihot)、aihot_url (https://aihot.news/story/…)、aihot_rank 等
   "message_text": "可直接发送的完整微信文本：首行是标题行，然后是正文、【来源】区、署名，最后一行是 tag",
   "content_sha256": "message_text 的 UTF-8 SHA-256"
 }
@@ -54,11 +54,15 @@ python3 scripts/record_status.py --date 2026-10-11 --edition-id 2026-10-11-noon 
 3. **挑选 5 条**：先按 AIHOT 排名，再看官方帖互动量。四家公司以外（`org: "other"`，消息里显示为【业界】）最多 2 条，而且只收 AIHOT 排名很靠前的。
 4. **只用真实数据**：链接、数字、引述都必须来自工具真实返回的内容，不编造。摘要 1–2 句，不超过 120 字。
 5. **格式（简报式）**：正文只放「编号 + 【机构】标题 + 摘要」；末尾是「——」和【来源】区，按编号列出「原文 <url>」和「AIHOT <url>（热点榜第 N）」，然后是署名「来源：X 公开动态、AIHOT（aihot.news）」，最后一行是本期 tag（`#BS-1011`）。这些都由 `--build` 自动生成。
-6. **语气：每天 8:40 的 routine 设 `"tone": "cute"`**（2026-10-11 已确认的软萌版）。`--build` 会自动加上：
-   - 标题行之后两行问候：「哈喽哈喽~ Builder Space 的宝宝们早安呀 🌸✨」（午间版为「午安」）和「人家又来送 AI 速递啦（10月11日）！今天也乖乖帮大家挑了 5 条最值得看的，快来摸摸头再看嘛~ (〃'▽'〃)💕」；
-   - 【来源】区之前的结尾：「今天的速递就到这里啦~ 人家明天还会准时来找你们玩的！有问题随时戳戳人家哦 (｡･ω･｡)ﾉ♡ 爱你们~ 🌷」。
-   - routine 只需给 **2–3 条**（最多 3 条）填 `aside_zh`：一句俏皮的小旁白，会以「（…）」显示在摘要下面，例如「哇~ 好多好多钱钱，人家数不过来啦 🥺💰」「Claude 酱好棒棒！做网页的宝宝们冲鸭~ 💻✨」「学生党炼丹福利来啦，嘿嘿~ 🧪」。旁白只表达情绪，**不能改变或新增事实**：不能有数字、链接、括号，最多 40 字；事实只写在 `summary_zh` 里。标题和摘要保持正常新闻语气。
-7. **发布**：草稿 JSON 需要 `date`、`tone`，以及每条的 `org/title_zh/summary_zh/source_url/posted_at`，可选 `aside_zh/aihot_url/aihot_rank/aihot_*_count/aihot_id`。加更版另设 `"edition_id": "2026-10-11-noon"`，会写到 `news/2026-10-11-noon.json`。
+6. **语气：每天 8:40 的 routine 设 `"tone": "cute"`**（2026-10-11 16:22 确认的 v2：俏皮、多 emoji、每条一句吐槽，**不嗲**）。`--build` 自动加上：
+   - 标题行之后一行问候（按版次 早安 / 午安 / 晚上好）：「哈喽大家早安呀 👋🌸 新鲜的 AI 速递送到啦～今天挑了 5 条值得一看的，冲！🚀」；
+   - 【来源】区之前的结尾：「今天就到这里啦～明天见 👋 有想聊的随时找我 😊💬」。
+   - routine 必须给 **每一条** 填两个字段：
+     - `title_emoji`：1–2 个和内容相关的 emoji（只能是 emoji），渲染在标题末尾，如 `💰` `🚦` `🤝` `🏆` `🧪`；
+     - `aside_zh`：一句短吐槽 / 玩笑，带 1–2 个 emoji（最多 3 个），以「（…）」显示在摘要下面。例如「老黄：钱不是问题，问题是没钱花 😎💸」「AI：我还没跑起来呢，你就给我装刹车？😅」「一份订阅两头用，打工人狂喜 🥹👍」「Claude 这波又卷赢了，前端同学瑟瑟发抖 🫣💻」「学生党炼丹福利 get ✨ 显卡不够？谷歌来凑 🧪🔥」。
+   - 吐槽**不能新增或改变事实**：不能有数字、链接、括号，最多 40 字；事实只写在 `summary_zh` 里，标题和摘要保持正常新闻语气。
+   - **禁用旧的嗲风格**：cute 语气下不得出现「人家」「宝宝」「摸摸头」「爱你们」「嗲」，校验会直接报错。
+7. **发布**：草稿 JSON 需要 `date`、`tone`，以及每条的 `org/title_zh/summary_zh/source_url/posted_at`，cute 语气下每条还必须有 `title_emoji` 和 `aside_zh`；可选 `aihot_url/aihot_rank/aihot_*_count/aihot_id`。加更版另设 `"edition_id": "2026-10-11-noon"`，会写到 `news/2026-10-11-noon.json`。
 
 ```bash
 python3 scripts/publish_news.py --build <draft.json>                 # 校验 → news/<edition_id>.json → commit → push

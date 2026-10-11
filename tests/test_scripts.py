@@ -12,7 +12,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import newslib as nl  # noqa: E402
 
 
+QUIPS = ["老黄：钱不是问题，问题是没钱花 😎💸", "AI：我还没跑起来呢，你就给我装刹车？😅", "一份订阅两头用，打工人狂喜 🥹👍",
+         "Claude 这波又卷赢了，前端同学瑟瑟发抖 🫣💻", "学生党炼丹福利 get ✨ 显卡不够？谷歌来凑 🧪🔥"]
+EMOJI = ["💰", "🚦", "🤝", "🏆", "🧪"]
+
+
 def draft(eid="2026-10-11", tone="normal", asides=None):
+    if tone == "cute" and asides is None:
+        asides = dict(enumerate(QUIPS))
     items = []
     for i, org in enumerate(["OpenAI", "Anthropic", "Google DeepMind", "NVIDIA", "other"]):
         it = {"org": org, "title_zh": f"标题{i}", "summary_zh": f"摘要内容{i}", "source_url": f"https://x.com/a/status/{i}",
@@ -21,6 +28,8 @@ def draft(eid="2026-10-11", tone="normal", asides=None):
             it.update(aihot_url="https://aihot.news/story/abc-1", aihot_rank=2)
         if asides and i in asides:
             it["aside_zh"] = asides[i]
+        if tone == "cute":
+            it["title_emoji"] = EMOJI[i]
         items.append(it)
     return {"date": "2026-10-11", "edition_id": eid, "tone": tone, "generated_at": "2026-10-11T08:40:00+11:00",
             "items": items}
@@ -44,21 +53,54 @@ class TestBuild(unittest.TestCase):
         self.assertEqual(nl.edition_relpath("2026-10-11", "status"), "status/2026-10-11.json")
 
     def test_cute_layout(self):
-        ed = nl.build_edition(draft("2026-10-11-noon", "cute", {0: "好耶~ 🌸", 3: "冲鸭~"}))
+        ed = nl.build_edition(draft("2026-10-11-noon", "cute"))
+        self.assertEqual(nl.validate_edition(ed, "2026-10-11", require_tag=True), [])
         lines = ed["message_text"].splitlines()
         self.assertEqual(lines[0], "Builder Space 每日 AI 速递 · 午间版 · 10月11日")
-        self.assertEqual(lines[1], "哈喽哈喽~ Builder Space 的宝宝们午安呀 🌸✨")
-        self.assertIn("（10月11日 午间版）", lines[2])
+        self.assertEqual(lines[1], "哈喽大家午安呀 👋🌸 新鲜的 AI 速递送到啦～今天挑了 5 条值得一看的，冲！🚀")
+        self.assertEqual(lines[2], "")
+        self.assertEqual(lines[3], "1. 【OpenAI】标题0 💰")
         i = lines.index("摘要内容0")
-        self.assertEqual(lines[i + 1], "（好耶~ 🌸）")
-        self.assertLess(lines.index(nl.CUTE_CLOSING), lines.index("【来源】"))
+        self.assertEqual(lines[i + 1], f"（{QUIPS[0]}）")
+        self.assertEqual(sum(1 for q in QUIPS if f"（{q}）" in ed["message_text"]), 5)
+        self.assertLess(lines.index("今天就到这里啦～明天见 👋 有想聊的随时找我 😊💬"), lines.index("【来源】"))
         self.assertEqual(lines[-1], "#BS-1011-noon")
-        self.assertEqual(nl.validate_edition(ed, "2026-10-11"), [])
+        for w in nl.CUTE_BANNED:
+            self.assertNotIn(w, ed["message_text"])
 
-    def test_cute_morning_salutation(self):
-        ed = nl.build_edition(draft("2026-10-11", "cute"))
-        self.assertIn("宝宝们早安呀", ed["message_text"])
-        self.assertIn("（10月11日）", ed["message_text"])
+    def test_cute_salutations(self):
+        self.assertIn("哈喽大家早安呀", nl.build_edition(draft("2026-10-11", "cute"))["message_text"])
+        self.assertIn("哈喽大家晚上好呀", nl.build_edition(draft("2026-10-11-evening", "cute"))["message_text"])
+        self.assertIn("哈喽大家好呀", nl.build_edition(draft("2026-10-11-extra", "cute"))["message_text"])
+
+    def test_cute_requires_quip_and_emoji_on_every_item(self):
+        d = draft(tone="cute"); del d["items"][2]["aside_zh"]
+        self.assertTrue(any("aside_zh required" in e for e in nl.validate_edition(nl.build_edition(d))))
+        d = draft(tone="cute"); del d["items"][4]["title_emoji"]
+        self.assertTrue(any("title_emoji required" in e for e in nl.validate_edition(nl.build_edition(d))))
+
+    def test_quip_needs_emoji(self):
+        d = draft(tone="cute"); d["items"][0]["aside_zh"] = "没有表情的吐槽"
+        self.assertTrue(any("emoji" in e for e in nl.validate_edition(nl.build_edition(d))))
+        d = draft(tone="cute"); d["items"][0]["aside_zh"] = "太多了 😀😀😀😀"
+        self.assertTrue(any("emoji" in e for e in nl.validate_edition(nl.build_edition(d))))
+
+    def test_title_emoji_only_emoji(self):
+        d = draft(tone="cute"); d["items"][0]["title_emoji"] = "钱 💰"
+        self.assertTrue(any("title_emoji" in e for e in nl.validate_edition(nl.build_edition(d))))
+
+    def test_banned_old_style_words(self):
+        for w in ("人家", "宝宝", "摸摸头", "爱你们", "嗲"):
+            d = draft(tone="cute"); d["items"][1]["aside_zh"] = f"{w}来啦 🌸"
+            errs = nl.validate_edition(nl.build_edition(d))
+            self.assertTrue(any("嗲" in e for e in errs), w)
+
+    def test_normal_does_not_render_emoji_or_quips(self):
+        d = draft(tone="cute"); d["tone"] = "normal"
+        ed = nl.build_edition(d)
+        self.assertNotIn("💰", ed["message_text"])
+        self.assertNotIn(QUIPS[0], ed["message_text"])
+        self.assertEqual(nl.validate_edition(ed), [])
 
     def test_normal_ignores_asides(self):
         ed = nl.build_edition(draft(asides={0: "好耶~"}))
@@ -88,13 +130,13 @@ class TestValidate(unittest.TestCase):
         self.assertTrue(nl.validate_edition(ed, "2026-10-11", require_tag=True))
 
     def test_aside_rules(self):
-        for bad in ("估值 250 亿", "看 https://x.com", "（嵌套）", "长" * 41):
-            ed = nl.build_edition(draft(tone="cute", asides={0: bad}))
+        for bad in ("估值 250 亿 😎", "看 https://x.com 😎", "（嵌套）😎", "长" * 40 + "😎"):
+            d = draft(tone="cute"); d["items"][0]["aside_zh"] = bad
+            ed = nl.build_edition(d)
             self.assertTrue(any("aside_zh" in e for e in nl.validate_edition(ed)), bad)
 
-    def test_max_three_asides(self):
-        ed = nl.build_edition(draft(tone="cute", asides={0: "a", 1: "b", 2: "c", 3: "d"}))
-        self.assertTrue(any("at most 3" in e for e in nl.validate_edition(ed)))
+    def test_all_five_quips_allowed(self):
+        self.assertEqual(nl.MAX_ASIDES, 5)
 
     def test_bad_tone(self):
         ed = nl.build_edition(draft())
